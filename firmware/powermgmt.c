@@ -596,6 +596,13 @@ static inline void charging_algorithm_step(void)
     {
     case CHARGER_PLUGGED:
     case CHARGER:
+#ifndef IPOD_6G
+        /* ipod6g already gates its charger state on the !CHRG pin */
+        if (!charging_state()) {
+            charge_state = DISCHARGING;
+            break;
+        }
+#endif
         charge_state = CHARGING;
         break;
     case CHARGER_UNPLUGGED:
