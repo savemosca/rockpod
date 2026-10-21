@@ -69,6 +69,7 @@ struct dynamic_colors_cache {
 
 static struct dynamic_colors_cache cache;
 static volatile bool needs_extraction;
+static bool art_overdue; /* timed out waiting for art, still watching */
 static uint16_t histogram[HISTOGRAM_BUCKETS];
 
 static int compute_luminance(int r8, int g8, int b8)
@@ -361,6 +362,7 @@ static void track_change_cb(unsigned short id, void *param)
 {
     (void)param;
     needs_extraction = true;
+    art_overdue = false;
     if (id == PLAYBACK_EVENT_TRACK_CHANGE)
         cache.track_change_tick = current_tick;
 }
@@ -383,6 +385,7 @@ void dynamic_colors_init(void)
     save_all_theme_colors();
     cache.was_enabled = global_settings.dynamic_colors;
     needs_extraction = false;
+    art_overdue = false;
 
     if (!events_registered)
     {
@@ -435,37 +438,38 @@ void dynamic_colors_check_extraction(int aa_slot)
     }
     cache.was_enabled = enabled;
 
-    if (!needs_extraction)
-        return;
     if (!enabled)
     {
         needs_extraction = false;
+        art_overdue = false;
         return;
     }
-    if (aa_slot < 0)
-    {
-        /* No known AA slot yet — can't extract */
+    if (!needs_extraction && !art_overdue)
         return;
-    }
 
-    int handle = playback_current_aa_hid(aa_slot);
+    /* No AA slot means the theme shows no art, which ends up in the
+     * timeout below instead of keeping the fast redraw loop alive. */
+    int handle = aa_slot >= 0 ? playback_current_aa_hid(aa_slot) : -1;
     if (handle >= 0)
     {
         struct bitmap *bmp;
         if (bufgetdata(handle, 0, (void *)&bmp) > 0)
             extract_colors(bmp);
         needs_extraction = false;
+        art_overdue = false;
     }
-    else
+    else if (needs_extraction)
     {
         /* Art not available yet — check timeout */
         long elapsed = current_tick - cache.track_change_tick;
         if (elapsed > NO_ART_TIMEOUT)
         {
-            /* No art for this track — fade to defaults */
+            /* No art yet — fade to defaults, but pick it up on a later
+             * regular render if it arrives (e.g. after a disk spin-up) */
             if (cache.valid && !cache.fading_out)
                 start_fade(cache.theme_fg, cache.theme_bg, true);
             needs_extraction = false;
+            art_overdue = aa_slot >= 0;
         }
         /* else: keep trying on next render */
     }
