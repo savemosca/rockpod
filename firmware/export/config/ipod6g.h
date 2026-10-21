@@ -156,7 +156,7 @@
  */
 #define BATTERY_CAPACITY_DEFAULT 550 /* default battery capacity */
 #define BATTERY_CAPACITY_MIN     300 /* min. capacity selectable */
-#define BATTERY_CAPACITY_MAX     3000 /* max. capacity selectable */
+#define BATTERY_CAPACITY_MAX     5000 /* max. capacity selectable */
 #define BATTERY_CAPACITY_INC      10 /* capacity increment */
 
 

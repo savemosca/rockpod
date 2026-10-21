@@ -154,7 +154,7 @@
 #define BATTERY_CAPACITY_DEFAULT_THICK 600 /* default battery capacity for the
                                               60/80GB model */
 #define BATTERY_CAPACITY_MIN      300 /* min. capacity selectable */
-#define BATTERY_CAPACITY_MAX     3000 /* max. capacity selectable --
+#define BATTERY_CAPACITY_MAX     5000 /* max. capacity selectable --
                                          3rd party batteries go this high */
 #define BATTERY_CAPACITY_INC       50 /* capacity increment */
 

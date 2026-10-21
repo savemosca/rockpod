@@ -1043,6 +1043,9 @@ struct plugin_api {
 #if defined(HAVE_ALBUMART) && defined(HAVE_LCD_COLOR)
     unsigned int (*dynamic_colors_resolve)(unsigned int original);
 #endif
+#ifdef HAVE_DISK_STORAGE
+    bool (*storage_get_ssd_mode)(void);
+#endif
 };
 
 /* plugin header */

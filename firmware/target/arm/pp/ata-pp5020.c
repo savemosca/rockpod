@@ -136,7 +136,7 @@ void ata_dma_set_mode(unsigned char mode) {
     IDE0_CFG |= 0x20000000; /* >= 50 Mhz */
 #endif
 
-    ata_is_ssd = ata_disk_isssd();
+    ata_is_ssd = ata_get_ssd_mode();
 }
 
 #define IDE_CFG_INTRQ           8

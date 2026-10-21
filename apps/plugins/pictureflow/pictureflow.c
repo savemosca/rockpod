@@ -2462,7 +2462,7 @@ static void thread(void)
 {
     /* SSD mode: poll more frequently since disk access is cheap */
 #ifdef HAVE_DISK_STORAGE
-    long sleep_time = (rb->global_settings->storage_mode == 2)
+    long sleep_time = rb->storage_get_ssd_mode()
                       ? HZ : 5 * HZ;
 #else
     long sleep_time = 5 * HZ;
@@ -4367,7 +4367,7 @@ static bool show_track_list(void)
 #endif
     pf_clear_display();
     if ( center_slide.slide_index != pf_tracks.cur_idx ) {
-        if (rb->global_settings->storage_mode != 2
+        if (!rb->storage_get_ssd_mode()
 #ifdef HAVE_TC_RAMCACHE
             && !rb->tagcache_is_in_ram()
 #endif
@@ -4584,7 +4584,7 @@ static bool track_list_ready(void)
 {
     if (pf_state != pf_show_tracks)
     {
-        if (rb->global_settings->storage_mode != 2
+        if (!rb->storage_get_ssd_mode()
 #ifdef HAVE_TC_RAMCACHE
             && !rb->tagcache_is_in_ram()
 #endif
@@ -5186,7 +5186,7 @@ static int pictureflow_main(void)
                 update_cover_in_animation();
                 render_all_slides();
                 if (center_slide.slide_index != pf_tracks.cur_idx
-                    && (rb->global_settings->storage_mode == 2
+                    && (rb->storage_get_ssd_mode()
 #ifdef HAVE_TC_RAMCACHE
                         || rb->tagcache_is_in_ram()
 #endif

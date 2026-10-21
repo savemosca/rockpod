@@ -199,8 +199,14 @@ static inline int ata_disk_isssd(void)
         then device is standard flash CF.  However this is not foolproof
         as newer CF cards (and those CF->SD adapters) may report this.
 
+       Some iFlash firmware (e.g. iFlash85) reports none of the above, so
+        also match "iFlash" at the start of the model string (words 27-46).
+
      */
     return ( (identify_info[217] == 0x0001)               /* "Solid state" rotational rate */
+             || (identify_info[27] == (('i' << 8) | 'F') && /* "iFlash" model */
+                 identify_info[28] == (('l' << 8) | 'a') &&
+                 identify_info[29] == (('s' << 8) | 'h'))
              || ((identify_info[168] & 0x0f) >= 0x06)     /* Explicit SSD form factors */
              || (identify_info[169] & (1<<0))             /* TRIM supported */
              || (identify_info[163] > 0)                  /* CF Advanced timing modes */

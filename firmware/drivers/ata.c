@@ -34,6 +34,7 @@
 #include "ata-defines.h"
 #include "fs_defines.h"
 #include "storage.h"
+#include "backlight.h"
 #include "logf.h"
 
 #define SELECT_DEVICE1  0x10
@@ -104,6 +105,20 @@ static long last_disk_activity = -1;
 static long power_off_tick = 0;
 #endif
 
+#ifndef BOOTLOADER
+#define ATA_SSD_MODE
+#endif
+
+#ifdef ATA_SSD_MODE
+/* Flash has nothing to spin down, so in SSD mode an idle sleep only flushes
+   and leaves the device powered and ready; power is cut once the backlight
+   has been off for ATA_SSD_POWER_OFF_TIMEOUT. */
+#define ATA_SSD_POWER_OFF_TIMEOUT 10*HZ
+static bool ssd_mode = false;
+static bool ssd_idle = false; /* ATA_SLEEPING without STANDBY having been sent */
+static long ssd_sleep_tick = 0;
+#endif
+
 static uint8_t  multisectors; /* number of supported multisectors */
 
 #ifdef HAVE_ATA_DMA
@@ -136,6 +151,17 @@ static inline bool ata_power_off_timed_out(void)
     return false;
 #endif
 }
+
+#if defined(ATA_SSD_MODE) && defined(HAVE_ATA_POWER_OFF)
+static inline bool ata_ssd_power_off_due(void)
+{
+    return
+#ifdef HAVE_BACKLIGHT
+           !is_backlight_on(true) &&
+#endif
+           TIME_AFTER(current_tick, ssd_sleep_tick + ATA_SSD_POWER_OFF_TIMEOUT);
+}
+#endif
 
 #include "ata-common.c"
 
@@ -182,6 +208,13 @@ static ICODE_ATTR int wait_for_rdy(void)
 static int ata_perform_wakeup(int state)
 {
     logf("ata WAKE %ld", current_tick);
+#ifdef ATA_SSD_MODE
+    if (ssd_idle) {
+        ssd_idle = false;
+        if (state == ATA_SLEEPING)
+            return 0;
+    }
+#endif
     if (state > ATA_OFF) {
         if (perform_soft_reset()) {
             return -1;
@@ -668,12 +701,26 @@ void ata_spindown(int seconds)
 
 void ata_set_storage_mode(int mode)
 {
+#ifdef ATA_SSD_MODE
+    /* 0=auto, 1=HDD, 2=SSD */
+    if (mode == 2)
+        ssd_mode = true;
+    else if (mode == 1)
+        ssd_mode = false;
+    else
+        ssd_mode = ata_disk_isssd();
+#else
     (void)mode;
+#endif
 }
 
 bool ata_get_ssd_mode(void)
 {
+#ifdef ATA_SSD_MODE
+    return ssd_mode;
+#else
     return false;
+#endif
 }
 
 bool ata_disk_is_active(void)
@@ -687,6 +734,21 @@ void ata_sleepnow(void)
         logf("ata SLEEPNOW %ld", current_tick);
         mutex_lock(&ata_mutex);
         if (ata_state == ATA_ON) {
+#ifdef ATA_SSD_MODE
+            if (ssd_mode) {
+                if (!ata_perform_flush_cache()) {
+                    /* SD adapters may ack the flush before the card has
+                       finished programming, and shutdown cuts power soon
+                       after this returns. */
+                    if (!ata_disk_can_sleep())
+                        sleep(HZ/4);
+                    ata_state = ATA_SLEEPING;
+                    ssd_idle = true;
+                    ssd_sleep_tick = current_tick;
+                }
+            }
+            else
+#endif
             if (!ata_perform_flush_cache() && !ata_perform_sleep()) {
                 ata_state = ATA_SLEEPING;
 #ifdef HAVE_ATA_POWER_OFF
@@ -1026,6 +1088,12 @@ static int set_features(void)
     }
 
     for (i=0; i < (int)(sizeof(features)/sizeof(features[0])); i++) {
+#ifdef ATA_SSD_MODE
+        /* APM and AAM only make sense for spinning disks */
+        if (ssd_mode && (features[i].subcommand == 0x05 ||
+                         features[i].subcommand == 0x42))
+            continue;
+#endif
         if (identify_info[features[i].id_word] & BIT_N(features[i].id_bit)) {
             ATA_OUT8(ATA_FEATURE, features[i].subcommand);
             ATA_OUT8(ATA_NSECTOR, features[i].parameter);
@@ -1137,6 +1205,11 @@ int STORAGE_INIT_ATTR ata_init(void)
             rc = -40 + rc;
             goto error;
         }
+
+#ifdef ATA_SSD_MODE
+        /* Auto-detect until the settings are applied */
+        ssd_mode = ata_disk_isssd();
+#endif
 
         multisectors = identify_info[47] & 0xff;
         if (!multisectors && (identify_info[59] & 0x100) == 0x100)
@@ -1260,6 +1333,20 @@ int ata_event(long id, intptr_t data)
                 mutex_unlock(&ata_mutex);
             }
 #endif
+#if defined(ATA_SSD_MODE) && defined(HAVE_ATA_POWER_OFF)
+            if (ssd_idle && ata_ssd_power_off_due()) {
+                mutex_lock(&ata_mutex);
+                if (ssd_idle && ata_state == ATA_SLEEPING) {
+                    logf("ata SSD OFF %ld", current_tick);
+                    /* lets devices that support it commit before power loss */
+                    ata_perform_sleep();
+                    ide_power_enable(false);
+                    ssd_idle = false;
+                    ata_state = ATA_OFF;
+                }
+                mutex_unlock(&ata_mutex);
+            }
+#endif
             STG_EVENT_ASSERT_ACTIVE(STORAGE_ATA);
         }
     }
@@ -1269,6 +1356,19 @@ int ata_event(long id, intptr_t data)
     else if (id == Q_STORAGE_SLEEP) {
         last_disk_activity = current_tick - sleep_timeout + HZ / 5;
     }
+#ifdef ATA_SSD_MODE
+    else if (id == Q_STORAGE_PRE_WAKE) {
+        /* Posted on backlight-on, so storage is ready before the UI asks */
+        if (ssd_mode && ata_state < ATA_ON) {
+            mutex_lock(&ata_mutex);
+            if (ata_state < ATA_ON && !ata_perform_wakeup(ata_state)) {
+                ata_state = ATA_ON;
+                keep_ata_active();
+            }
+            mutex_unlock(&ata_mutex);
+        }
+    }
+#endif
 #ifndef USB_NONE
     else if (id == SYS_USB_CONNECTED) {
         logf("deq USB %ld", current_tick);

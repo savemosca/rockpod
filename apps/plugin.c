@@ -881,6 +881,9 @@ static const struct plugin_api rockbox_api = {
 #if defined(HAVE_ALBUMART) && defined(HAVE_LCD_COLOR)
     dynamic_colors_resolve,
 #endif
+#ifdef HAVE_DISK_STORAGE
+    STORAGE_FUNCTION(get_ssd_mode),
+#endif
 };
 
 static int plugin_buffer_handle;
@@ -934,7 +937,7 @@ int plugin_load(const char* plugin, const void* parameter)
     }
 
 #ifdef HAVE_DISK_STORAGE
-    if (!storage_disk_is_active() && global_settings.storage_mode != 2)
+    if (!storage_disk_is_active() && !storage_get_ssd_mode())
         splash(0, ID2P(LANG_WAIT));
 #endif
     strcpy(current_plugin, plugin);
