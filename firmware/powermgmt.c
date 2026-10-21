@@ -246,7 +246,7 @@ int battery_current(void)
     /* While charging we must report the charging current. */
     if (charging_state()) {
         current = CURRENT_MAX_CHG - current;
-        current = MIN(current, 1);
+        current = MAX(current, 1);
     }
 #endif
 

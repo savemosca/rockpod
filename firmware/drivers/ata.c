@@ -110,9 +110,7 @@ static long power_off_tick = 0;
 #endif
 
 #ifdef ATA_SSD_MODE
-/* Flash has nothing to spin down, so in SSD mode an idle sleep only flushes
-   and leaves the device powered and ready; power is cut once the backlight
-   has been off for ATA_SSD_POWER_OFF_TIMEOUT. */
+/* SSD idle keeps flash powered until the timeout expires with backlight off. */
 #define ATA_SSD_POWER_OFF_TIMEOUT 10*HZ
 static bool ssd_mode = false;
 static bool ssd_idle = false; /* ATA_SLEEPING without STANDBY having been sent */
@@ -208,6 +206,9 @@ static ICODE_ATTR int wait_for_rdy(void)
 static int ata_perform_wakeup(int state)
 {
     logf("ata WAKE %ld", current_tick);
+#ifdef HAVE_ATA_POWER_OFF
+    power_off_tick = 0;
+#endif
 #ifdef ATA_SSD_MODE
     if (ssd_idle) {
         ssd_idle = false;
@@ -256,7 +257,8 @@ static int ata_perform_sleep(void)
     */
     ATA_OUT8(ATA_COMMAND, CMD_STANDBY_IMMEDIATE);
 
-    if (!wait_for_rdy()) {
+    if (!wait_for_rdy() ||
+        (ATA_IN8(ATA_ALT_STATUS) & (STATUS_ERR | STATUS_DF))) {
         DEBUGF("ata_perform_sleep() - CMD failed\n");
         return -2;
     }
@@ -702,13 +704,22 @@ void ata_spindown(int seconds)
 void ata_set_storage_mode(int mode)
 {
 #ifdef ATA_SSD_MODE
-    /* 0=auto, 1=HDD, 2=SSD */
-    if (mode == 2)
-        ssd_mode = true;
-    else if (mode == 1)
-        ssd_mode = false;
-    else
-        ssd_mode = ata_disk_isssd();
+    bool new_mode;
+
+    mutex_lock(&ata_mutex);
+    new_mode = mode == 2 || (mode != 1 && ata_disk_isssd());
+
+    if (new_mode != ssd_mode) {
+        ssd_mode = new_mode;
+#ifdef HAVE_ATA_POWER_OFF
+        power_off_tick = 0;
+#endif
+        if (ata_state == ATA_SLEEPING && !ata_perform_wakeup(ata_state)) {
+            ata_state = ATA_ON;
+            keep_ata_active();
+        }
+    }
+    mutex_unlock(&ata_mutex);
 #else
     (void)mode;
 #endif
@@ -734,6 +745,9 @@ void ata_sleepnow(void)
         logf("ata SLEEPNOW %ld", current_tick);
         mutex_lock(&ata_mutex);
         if (ata_state == ATA_ON) {
+#ifdef HAVE_ATA_POWER_OFF
+            power_off_tick = 0;
+#endif
 #ifdef ATA_SSD_MODE
             if (ssd_mode) {
                 if (!ata_perform_flush_cache()) {
@@ -1325,24 +1339,33 @@ int ata_event(long id, intptr_t data)
         if (ata_state != ATA_ON || !ata_sleep_timed_out()) {
 #ifdef HAVE_ATA_POWER_OFF
             if (ata_state == ATA_SLEEPING && ata_power_off_timed_out()) {
-                power_off_tick = 0;
                 mutex_lock(&ata_mutex);
-                logf("ata OFF %ld", current_tick);
-                ide_power_enable(false);
-                ata_state = ATA_OFF;
+                if (ata_state == ATA_SLEEPING &&
+#ifdef ATA_SSD_MODE
+                    !ssd_idle &&
+#endif
+                    ata_power_off_timed_out()) {
+                    logf("ata OFF %ld", current_tick);
+                    ide_power_enable(false);
+                    power_off_tick = 0;
+                    ata_state = ATA_OFF;
+                }
                 mutex_unlock(&ata_mutex);
             }
 #endif
 #if defined(ATA_SSD_MODE) && defined(HAVE_ATA_POWER_OFF)
             if (ssd_idle && ata_ssd_power_off_due()) {
                 mutex_lock(&ata_mutex);
-                if (ssd_idle && ata_state == ATA_SLEEPING) {
+                if (ssd_idle && ata_state == ATA_SLEEPING &&
+                    ata_ssd_power_off_due()) {
                     logf("ata SSD OFF %ld", current_tick);
-                    /* lets devices that support it commit before power loss */
-                    ata_perform_sleep();
-                    ide_power_enable(false);
+                    rc = ata_perform_sleep();
+                    /* Failed standby needs a reset before the next transfer. */
                     ssd_idle = false;
-                    ata_state = ATA_OFF;
+                    if (!rc) {
+                        ide_power_enable(false);
+                        ata_state = ATA_OFF;
+                    }
                 }
                 mutex_unlock(&ata_mutex);
             }

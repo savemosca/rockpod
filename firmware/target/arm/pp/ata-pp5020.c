@@ -106,8 +106,6 @@ static bool dma_boosted = false;
 static bool dma_needs_boost;
 #endif
 
-static int ata_is_ssd = 0;
-
 /* This function sets up registers for 80 Mhz.
    Ultra DMA mode 2 works at 30 Mhz.
  */
@@ -135,8 +133,6 @@ void ata_dma_set_mode(unsigned char mode) {
 #if !defined(IPOD_NANO)
     IDE0_CFG |= 0x20000000; /* >= 50 Mhz */
 #endif
-
-    ata_is_ssd = ata_get_ssd_mode();
 }
 
 #define IDE_CFG_INTRQ           8
@@ -179,7 +175,7 @@ bool ata_dma_setup(void *addr, unsigned long bytes, bool write) {
     if (write) {
         if ((unsigned long)addr & 3)
             return false;
-        if (!ata_is_ssd)
+        if (!ata_get_ssd_mode())
             return false;
     }
 

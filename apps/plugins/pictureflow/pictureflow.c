@@ -639,6 +639,20 @@ void reset_track_list(void);
 static bool thread_is_running;
 static bool wants_to_quit;
 
+static void pf_cpu_boost(bool boost)
+{
+#ifdef HAVE_ADJUSTABLE_CPU_FREQ
+    static bool boosted;
+
+    if (boosted != boost) {
+        rb->cpu_boost(boost);
+        boosted = boost;
+    }
+#else
+    (void)boost;
+#endif
+}
+
 /*
     Prevent picture loading thread from allocating
     buflib memory while the main thread may be
@@ -2460,16 +2474,9 @@ static int create_empty_slide(bool force)
  */
 static void thread(void)
 {
-    /* SSD mode: poll more frequently since disk access is cheap */
-#ifdef HAVE_DISK_STORAGE
-    long sleep_time = rb->storage_get_ssd_mode()
-                      ? HZ : 5 * HZ;
-#else
-    long sleep_time = 5 * HZ;
-#endif
     struct queue_event ev;
     while (1) {
-        rb->queue_wait_w_tmo(&thread_q, &ev, sleep_time);
+        rb->queue_wait(&thread_q, &ev);
         switch (ev.id) {
             case EV_EXIT:
                 return;
@@ -2478,15 +2485,13 @@ static void thread(void)
                 break;
         }
 
-        if(ev.id != SYS_TIMEOUT) {
-            while ( rb->queue_empty(&thread_q) ) {
-                buf_ctx_lock();
-                bool slide_loaded = load_new_slide();
-                buf_ctx_unlock();
-                if (!slide_loaded)
-                    break;
-                rb->yield();
-            }
+        while ( rb->queue_empty(&thread_q) ) {
+            buf_ctx_lock();
+            bool slide_loaded = load_new_slide();
+            buf_ctx_unlock();
+            if (!slide_loaded)
+                break;
+            rb->yield();
         }
     }
 }
@@ -3780,9 +3785,7 @@ static void cleanup(void)
     if (buf_ctx_locked)
         buf_ctx_unlock();
 
-#ifdef HAVE_ADJUSTABLE_CPU_FREQ
-    rb->cpu_boost(false);
-#endif
+    pf_cpu_boost(false);
     end_pf_thread();
 
     /* Turn on backlight timeout (revert to settings) */
@@ -4877,9 +4880,7 @@ static bool init(void)
     void * buf;
     size_t buf_size;
 
-#ifdef HAVE_ADJUSTABLE_CPU_FREQ
-    rb->cpu_boost(true); /* revert in cleanup */
-#endif
+    pf_cpu_boost(true);
 
     wants_to_quit = false;
 
@@ -5167,6 +5168,7 @@ static int pictureflow_main(void)
         /* SBS rendering in get_custom_action resets the viewport to default.
          * Restore ours so LCD API calls use the correct coordinates. */
         rb->lcd_set_viewport(&pf_vp);
+        pf_cpu_boost(true);
 
         current_update = *rb->current_tick;
         frames++;
@@ -5253,6 +5255,9 @@ static int pictureflow_main(void)
 
         /* Copy offscreen buffer to LCD and give time to other threads */
         mylcd_update();
+        if ((pf_state == pf_idle || pf_state == pf_show_tracks) &&
+            aa_cache.inspected >= pf_idx.album_ct)
+            pf_cpu_boost(false);
         rb->yield();
 
         switch (button) {
