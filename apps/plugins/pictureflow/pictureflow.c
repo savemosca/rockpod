@@ -2485,6 +2485,9 @@ static void thread(void)
                 break;
         }
 
+#ifdef HAVE_ADJUSTABLE_CPU_FREQ
+        rb->cpu_boost(true);
+#endif
         while ( rb->queue_empty(&thread_q) ) {
             buf_ctx_lock();
             bool slide_loaded = load_new_slide();
@@ -2493,6 +2496,9 @@ static void thread(void)
                 break;
             rb->yield();
         }
+#ifdef HAVE_ADJUSTABLE_CPU_FREQ
+        rb->cpu_boost(false);
+#endif
     }
 }
 
@@ -5168,7 +5174,8 @@ static int pictureflow_main(void)
         /* SBS rendering in get_custom_action resets the viewport to default.
          * Restore ours so LCD API calls use the correct coordinates. */
         rb->lcd_set_viewport(&pf_vp);
-        pf_cpu_boost(true);
+        pf_cpu_boost((pf_state != pf_idle && pf_state != pf_show_tracks) ||
+                     aa_cache.inspected < pf_idx.album_ct);
 
         current_update = *rb->current_tick;
         frames++;
@@ -5255,9 +5262,6 @@ static int pictureflow_main(void)
 
         /* Copy offscreen buffer to LCD and give time to other threads */
         mylcd_update();
-        if ((pf_state == pf_idle || pf_state == pf_show_tracks) &&
-            aa_cache.inspected >= pf_idx.album_ct)
-            pf_cpu_boost(false);
         rb->yield();
 
         switch (button) {
